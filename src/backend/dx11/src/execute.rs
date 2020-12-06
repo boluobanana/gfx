@@ -50,11 +50,17 @@ fn copy_texture(context: *mut d3d11::ID3D11DeviceContext,
                (dst.info.width, dst.info.height, dst.info.depth));
 
     let (src_slice, src_front) = match src.kind.get_num_slices() {
-        Some(_) => { assert!(src.info.depth <= 1); (src.info.zoffset, 0) },
+        Some(_) => {
+            assert!(src.info.depth <= 1);
+            (src.info.zoffset, 0)
+        }
         None => (0, src.info.zoffset),
     };
     let (dst_slice, dst_front) = match dst.kind.get_num_slices() {
-        Some(_) => { assert!(dst.info.depth <= 1); (dst.info.zoffset, 0) },
+        Some(_) => {
+            assert!(dst.info.depth <= 1);
+            (dst.info.zoffset, 0)
+        }
         None => (0, dst.info.zoffset),
     };
 
@@ -69,16 +75,15 @@ fn copy_texture(context: *mut d3d11::ID3D11DeviceContext,
 
     unsafe {
         let src_sub = d3d11::D3D11CalcSubresource(src.info.mipmap as _,
-                                                   src.kind.get_num_levels() as _,
-                                                   src_slice as _);
+                                                  src.kind.get_num_levels() as _,
+                                                  src_slice as _);
         let dst_sub = d3d11::D3D11CalcSubresource(dst.info.mipmap as _,
-                                                   dst.kind.get_num_levels() as _,
-                                                   dst_slice as _);
+                                                  dst.kind.get_num_levels() as _,
+                                                  dst_slice as _);
         (*context).CopySubresourceRegion(dst.texture.as_resource(), dst_sub,
                                          dst.info.xoffset as _, dst.info.yoffset as _, dst_front as _,
                                          src.texture.as_resource(), src_sub, &src_box)
     };
-
 }
 
 pub fn update_buffer(context: *mut d3d11::ID3D11DeviceContext, buffer: &Buffer,
@@ -105,14 +110,25 @@ pub fn update_texture(context: *mut d3d11::ID3D11DeviceContext,
                       data: &[u8]) {
     let subres = texture_subres(tex.cube_face, &tex.info);
     let dst_resource = tex.texture.as_resource();
-    // DYNAMIC only; This only works if the whole texture is covered.
-    assert_eq!(tex.info.xoffset + tex.info.yoffset + tex.info.zoffset, 0);
+    // DYNAMIC only;
+    let (width, ..) = tex.kind.get_level_dimensions(tex.info.mipmap);
     let map_type = d3d11::D3D11_MAP_WRITE_DISCARD;
+
+    let tex_info_height = tex.info.height as isize;
+    let tex_info_width = tex.info.width as isize;
+
     let hr = unsafe {
         let mut sub = mem::zeroed();
         let hr = (*context).Map(dst_resource, subres, map_type, 0, &mut sub);
-        let dst = sub.pData as *mut u8;
-        ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+
+        for i in 0..tex_info_height {
+            let dst_offset_bytes = (tex.info.xoffset as isize) + ((tex.info.yoffset as isize + i) * (width as isize));
+            let src_offset_bytes = i * tex_info_width;
+            let dst = (sub.pData as *mut u8).offset(dst_offset_bytes);
+            let src = data.as_ptr().offset(src_offset_bytes);
+            ptr::copy_nonoverlapping(src, dst, tex_info_width as usize);
+        }
+
         (*context).Unmap(dst_resource, 0);
         hr
     };
@@ -141,9 +157,9 @@ pub fn process(ctx: *mut d3d11::ID3D11DeviceContext, command: &command::Command,
     use core::shade::Stage;
     use command::Command::*;
 
-    let max_cb  = core::MAX_CONSTANT_BUFFERS as UINT;
-    let max_srv = core::MAX_RESOURCE_VIEWS   as UINT;
-    let max_sm  = core::MAX_SAMPLERS         as UINT;
+    let max_cb = core::MAX_CONSTANT_BUFFERS as UINT;
+    let max_srv = core::MAX_RESOURCE_VIEWS as UINT;
+    let max_sm = core::MAX_SAMPLERS as UINT;
     //debug!("Processing {:?}", command);
     match *command {
         BindProgram(ref prog) => unsafe {
@@ -161,7 +177,7 @@ pub fn process(ctx: *mut d3d11::ID3D11DeviceContext, command: &command::Command,
         },
         BindVertexBuffers(ref buffers, ref strides, ref offsets) => unsafe {
             (*ctx).IASetVertexBuffers(0, core::MAX_VERTEX_ATTRIBUTES as _,
-                &buffers[0].0, strides.as_ptr(), offsets.as_ptr());
+                                      &buffers[0].0, strides.as_ptr(), offsets.as_ptr());
         },
         BindConstantBuffers(stage, ref buffers) => match stage {
             Stage::Vertex => unsafe {
@@ -216,7 +232,7 @@ pub fn process(ctx: *mut d3d11::ID3D11DeviceContext, command: &command::Command,
         },
         BindPixelTargets(ref colors, ds) => unsafe {
             (*ctx).OMSetRenderTargets(core::MAX_COLOR_TARGETS as _,
-                &colors[0].0, ds.0);
+                                      &colors[0].0, ds.0);
         },
         SetPrimitive(topology) => unsafe {
             (*ctx).IASetPrimitiveTopology(topology);
@@ -238,18 +254,18 @@ pub fn process(ctx: *mut d3d11::ID3D11DeviceContext, command: &command::Command,
         },
         CopyBuffer(ref src, ref dst, src_offset, dst_offset, size) => {
             copy_buffer(ctx, src, dst, src_offset, dst_offset, size);
-        },
+        }
         CopyTexture(ref src, ref dst) => {
             copy_texture(ctx, src, dst);
-        },
+        }
         UpdateBuffer(ref buffer, pointer, offset) => {
             let data = data_buf.get(pointer);
             update_buffer(ctx, buffer, data, offset);
-        },
+        }
         UpdateTexture(ref dst, pointer) => {
             let data = data_buf.get(pointer);
             update_texture(ctx, dst, data);
-        },
+        }
         GenerateMips(ref srv) => unsafe {
             (*ctx).GenerateMips(srv.0);
         },
